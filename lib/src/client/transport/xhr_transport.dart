@@ -23,18 +23,8 @@ import '../../client/call.dart';
 import '../../shared/message.dart';
 import '../../shared/status.dart';
 import '../connection.dart';
-import 'cors.dart' as cors;
 import 'transport.dart';
 import 'web_streams.dart';
-
-const _contentTypeKey = 'Content-Type';
-
-/// All accepted content-type header's prefix.
-const _validContentTypePrefix = [
-  'application/grpc',
-  'application/json+protobuf',
-  'application/x-protobuf'
-];
 
 class XhrTransportStream implements GrpcTransportStream {
   final Client _client;
@@ -85,23 +75,26 @@ class XhrTransportStream implements GrpcTransportStream {
         .transform(GrpcWebDecoder())
         .transform(grpcDecompressor())
         .listen(_incomingMessages.add,
-            onError: _onError, onDone: _incomingMessages.close);
+        onError: _onError, onDone: _incomingMessages.close);
   }
 
   bool _onHeadersReceived(StreamedResponse response) {
     final contentType = response.headers['content-type'];
     if (response.statusCode != 200) {
       _onError(
-          GrpcError.unavailable('XhrConnection status ${response.statusCode}'));
+          GrpcError.unavailable('XhrConnection status ${response.statusCode}'),
+          StackTrace.current);
       return false;
     }
     if (contentType == null) {
-      _onError(GrpcError.unavailable('XhrConnection missing Content-Type'));
+      _onError(GrpcError.unavailable('XhrConnection missing Content-Type'),
+          StackTrace.current);
       return false;
     }
-    if (!_checkContentType(contentType)) {
+    if (!contentType.startsWith('application/grpc')) {
       _onError(
-          GrpcError.unavailable('XhrConnection bad Content-Type $contentType'));
+          GrpcError.unavailable('XhrConnection bad Content-Type $contentType'),
+          StackTrace.current);
       return false;
     }
 
@@ -153,21 +146,10 @@ class XhrClientConnection extends ClientConnection {
 
   @override
   GrpcTransportStream makeRequest(String path, Duration timeout,
-      Map<String, String> metadata, ErrorHandler onError) {
+      Map<String, String> metadata, ErrorHandler onError,
+      {CallOptions callOptions}) {
     final Request request = createHttpRequest(path);
 
-    var requestUri = uri.resolve(path);
-    if (callOptions is WebCallOptions &&
-        callOptions.bypassCorsPreflight == true) {
-      requestUri = cors.moveHttpHeadersToQueryParam(metadata, requestUri);
-    }
-
-    final HttpRequest request = createHttpRequest();
-    request.open('POST', requestUri.toString());
-    if (callOptions is WebCallOptions && callOptions.withCredentials == true) {
-      request.withCredentials = true;
-    }
-    // Must set headers after calling open().
     _initializeRequest(request, metadata);
 
     final XhrTransportStream transportStream = XhrTransportStream(
@@ -195,13 +177,4 @@ class XhrClientConnection extends ClientConnection {
 
   @override
   Future<void> shutdown() async {}
-}
-
-MapEntry<String, String> _getContentTypeHeader(Map<String, String> metadata) {
-  for (var entry in metadata.entries) {
-    if (entry.key.toLowerCase() == _contentTypeKey.toLowerCase()) {
-      return entry;
-    }
-  }
-  return null;
 }
